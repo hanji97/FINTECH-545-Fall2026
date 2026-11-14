@@ -1,0 +1,541 @@
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+\usepackage[authoryear,round]{natbib}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage[hidelinks]{hyperref}
+
+\captionsetup{font=small,labelfont=bf}
+\setlength{\parskip}{0.45em}
+\setlength{\parindent}{0pt}
+
+
+\newcommand{\tbl}[1]{\input{../output/tables/#1.tex}}
+\newcommand{\fig}[1]{../output/figures/#1.pdf}
+
+\title{Assignment 3 --- Options, Option Risk, and Portfolio Construction\\[0.3em]
+\large FinTech 545 --- Quantitative Risk Management}
+\author{} % Fill in name if desired: \author{Your Name}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section*{Set-up and conventions}
+
+All code is contained in the \texttt{Assignment3} folder, in Julia 1.11, with instructions in the README. The \texttt{fitted\_model.jl} (normal/$t$ fits, AICc) and \texttt{return\_calculate.jl} files found in \texttt{library/} are unchanged from my weeks 1--3 library. The rest is new: GBSM with Greeks and implied vol, binomial trees, VaR/ES, OLS and the max Sharpe optimizer. Names and arguments of functions are based on the class library. Before using the library I ran it against the class test cases (Table~\ref{tab:tests}); all 14 pass.
+
+\begin{table}[H]
+\centering\small
+\caption{Library checked against the class test cases.}
+\label{tab:tests}
+\tbl{tests}
+\end{table}
+
+Conventions, unless a problem says otherwise:
+\begin{itemize}\setlength\itemsep{0.1em}
+\item VaR and ES are positive for a loss, measured from zero: $\mathrm{VaR}_\alpha=-F^{-1}(\alpha)$, $\mathrm{ES}_\alpha=-E[X\mid X\le-\mathrm{VaR}_\alpha]$ \citep[Weeks 04--05]{pazzula2026notes}. The empirical quantile averages the order statistics at $\lfloor n\alpha\rfloor$ and $\lceil n\alpha\rceil$, as in the class library.
+\item The standard deviations use $n-1$. Skewness and kurtosis (excess kurtosis) are bias adjusted.
+\item AICc $=-2\ell+2k+2k(k+1)/(n-k-1)$ \citep{hurvich1989regression}; $k=2$ for the normal, 3 for the $t$, $p+1$ for a regression with $p$ coefficients.
+\item Theta is the change in option value / change in time per year, $-\partial V/\partial T$ (typically negative for a long option). Vega is per 1.00 of vol; I am quoting vol changes in vol points (0.01).
+\end{itemize}
+
+%======================================================================
+\section{Implied volatility from a dirty chain}
+
+$S=182.40$, $r=4.25\%$, $q=0.60\%$, $T=35/365=0.09589$. All pricing is GBSM with $b=r-q$ \citep{merton1973theory,pazzula2026notes}.
+
+\subsection*{Predict}
+
+\paragraph{(a) Put call parity.} Parity with the dividend yield is $C-P=Se^{-qT}-Xe^{-rT}$. Following the assignment, I only flag a strike if the gap is bigger than the band (call spread + put spread). This is a stricter rule as only half of each spread is crossed when trading from the mids.
+
+\begin{table}[H]
+\centering\small
+\caption{Put call parity on mids. Gap $=(C_{mid}-P_{mid})-(Se^{-qT}-Xe^{-rT})$; Band = call spread + put spread.}
+\label{tab:p1parity}
+\tbl{p1_parity}
+\end{table}
+
+Only $X=175$ is flagged: the gap is $0.888$ against a band of $0.47$. Every other strike from 140 to 210 is within 0.6 of a cent, so my $r$, $q$ and $T$ are the same as the ones in the quotes. The bad leg is the put. Put prices must be convex in the strike, but the 165, 170 and 175 put mids give a butterfly of $0.91-2(1.55)+1.71=-0.48$. The calls around 175 fall smoothly ($-4.34$, $-3.93$, $-3.38$, $-2.68$ per 5 strike points). Parity puts the 175 put at about $2.60$, not $1.71$. If the quotes were firm, then selling the call at its 10.42 bid and buying the put at its 1.76 ask against the stock would have a P\&L of $8.66-8.01=\$0.65$, which is the gap less half the band. That would not last in any live market, and I think the 175 put quote is either stale, or it was typed incorrectly.
+
+\paragraph{(b) Parity and implied vol.} Both the call and put IVs must be equal, provided that the prices of both are within the bounds of GBSM so that an IV exists. When parity holds, the market put price is $C-Se^{-qT}+Xe^{-rT}$. GBSM satisfies parity for any $\sigma$, and pricing the put at the IV of the call ($\sigma_c$) gives $C-Se^{-qT}+Xe^{-rT}$, which is the parity price. GBSM is increasing in $\sigma$; therefore only $\sigma_c$ is the vol which reprices the put. A call--put IV gap is a parity violation in vol.
+
+\paragraph{(c) Which IVs to trust.} An IV error is approximately the price error / vega, and vega is small in both wings. So I expect the worst IVs on two types of quote:
+\begin{itemize}\setlength\itemsep{0.1em}
+\item Deep out-of-the-money quotes at the minimum price: the 215--225 calls are all 0.05/0.10 and the 140 put is 0.06/0.12. Of course, the spread is most of the price, and a price that cannot fall when the strike increases results in a rising IV.
+\item Deep in-the-money quotes: at a given vol the call and put at the same strike (140 in this case) have the same small vega, but the call's spread is \$1.34 vs 6 cents for the put.
+\end{itemize}
+The best IVs should be the OTM options at or near spot (puts 165--180 and calls 185--200), with spreads of 7--19 cents on \$0.6--4.6 prices.
+
+\subsection*{Fit}
+
+\paragraph{(d) Implied vols.} I used a bracketing root finder, after checking that the price is bracketed by the GBSM bounds. As $\sigma\to0$ a call goes to $\max(0,Se^{-qT}-Xe^{-rT})$ and a put to $\max(0,Xe^{-rT}-Se^{-qT})$; as $\sigma\to\infty$ they go to $Se^{-qT}$ and $Xe^{-rT}$. The results are in Table~\ref{tab:p1iv} and Figure~\ref{fig:p1smile}.
+
+9 quotes have no IV: the bids of the 140--155 calls and the 205--225 puts. Each bid is below the $\sigma\to0$ bound (e.g.\ 42.28 for the 140 call against 42.86), so no vol produces it. These are not bad quotes; the mids satisfy parity (Table~\ref{tab:p1parity}). A deep in-the-money option has almost no time value (8.6 cents on the 140 call), but a wide spread (\$1.34), and so half the spread is bigger than the time value, leaving a bid price lower than the bound.
+
+\begin{table}[H]
+\centering\footnotesize
+\caption{Implied vol (\%) from bid, mid and ask; vega at the mid IV; IV change in vol points for a one cent price change ($100\times0.01/\text{vega}$). ``--'' = no implied vol.}
+\label{tab:p1iv}
+\tbl{p1_iv}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{\fig{p1_smile}}
+\caption{Call and put IV against strike. Lines are mid IVs; shaded bands run from bid IV to ask IV where both exist.}
+\label{fig:p1smile}
+\end{figure}
+
+\paragraph{(e) Vega and one cent.} Refer to the Vega and the $\Delta$IV columns of Table~\ref{tab:p1iv}. Vega near the money is approximately 22; therefore one cent will move the IV by 0.045 vol points. In the wings one cent is 0.52 vol points on the 225 call, 0.61 on the 140 call and 3.7 on the 225 put. The vegas are different for the 225 call and put only because their respective mid IVs are different (29.4\% versus 22.2\%).
+
+\subsection*{Reconcile}
+
+\paragraph{(f) The flagged strike.} Yes, the put curve has a notch at 175: $21.16\%$ against $26.05\%$ for the call, with the neighbouring puts at 27.2\% and 25.0\%. In vol points the parity gap is $100\times0.888/18.84=4.71$ using the call's vega, or $5.10$ using the put's. Between the two lies the actual call--put IV difference, $4.88$, and this must be the case because vega increases with $\sigma$ at this strike. Prediction (b) is true everywhere else: at each of the unflagged strikes 140--210 the call and put IVs align within 0.27 vol points (the worst correspondence being at the 140 strike, where one cent corresponds to 0.6 vol points).
+
+\paragraph{(g) The call wing above 210.} The call IV climbs from 22.07\% at 210 to 23.82\%, 26.69\% and 29.45\% at 215--225, while the puts at the same strikes stay near 22\%. It doesn't reflect the market; it reflects the quotes. All three calls are quoted 0.05/0.10, a minimum price. At the puts' IVs the calls would be worth 4.0, 1.5, and 0.5 cents, below the 5 cent bid, so GBSM would have to raise the vol, as the price cannot move lower. Thus, even the call bid IVs (22.6\%, 25.3\%, 28.0\%) are higher than the put mid IVs, and from (e) 1 cent is about half a vol point here, so the upturn is not inside the spread. The put mids are not spot on either (3.7 points per cent at 225), but they do match the 22\% that both the calls and puts show at 200--210.
+
+But parity doesn't catch it because the band at these strikes comes from the deep in-the-money puts, whose spreads are at least \$1. The bands are 1.05--1.36, while the call errors are only 3.5--7.0 cents.
+
+This validates (c), but with one caveat: the 215--225 calls do not show random noise, but rather a one-sided upward bias from the floor. The 140 put, which was also near the floor, was okay: at the skew's 39\% it is worth about 9 cents, above the 5 cent minimum.
+
+\paragraph{(h) Shape of the smile.} Without the 175 put and the call wing, IV falls from about 39\% at 140 to 30\% at 160, 25\% at the money, and flattens near 22\% above 200. This is a downward skew; that is, more vol is reflected in the price of OTM puts than OTM calls. The risk-neutral distribution has a fatter left tail than the lognormal, and hedging demand for puts bids up put prices and GBSM sees this as a higher vol.
+
+%======================================================================
+\section{American options and discrete dividends}
+
+$S=48.50$, $X=50$, $T=0.5$, $r=4.5\%$, $\sigma=30\%$; dividends \$0.25 at $t=0.10$ and \$1.50 at $t=0.40$. I use $N=500$, so the dividends fall on steps 100 and 400.
+
+\subsection*{Predict}
+
+\paragraph{(a) Early exercise condition.} The interest on the strike is lost if the call is exercised just before the dividend. For the last dividend, exercise can only be optimal if $D_n>X(1-e^{-r(T-t_n)})$ \citep[Ch.~15]{hull2021options}. This is done for each dividend in the Week 07 test:
+
+\begin{table}[H]
+\centering\small
+\caption{The Week 07 condition for each dividend.}
+\tbl{p2_condition}
+\end{table}
+
+$D_1=0.25$ is far below $0.8919$. For an earlier dividend, the comparison would be interest till the next dividend date, as the call may be exercised there: $X(1-e^{-r(t_2-t_1)})=0.6705$, and $D_1$ doesn't even reach it. So the call is never exercised before the first dividend. If the call is deep enough in the money, exercise right before the second dividend may be optimal in this case because $D_2=1.50$ is quite high compared to $0.2245$.
+
+\paragraph{(b) Effect of the dividends.} The dividends should reduce the forward price of the stock and therefore, both calls should lose value and both puts should gain. An American call option is never exercised early if there are no dividends, and its premium is zero; if there is $D_2$ the premium should be positive and the American call should not drop so much as the European. For the put it goes the other way. Exercising a put early gives you interest on the strike, but if you hold it without exercising you'll get the dividend drop, and \$1.50 is a lot more than the interest you'd have on the strike. Early put exercise is therefore not as attractive as a result of dividends. Prediction: the early exercise premium of the call increases; the early exercise premium of the put decreases; with dividends, the premium on the call should be the larger of the two.
+
+\subsection*{Fit}
+
+\paragraph{(c) Prices.} Without dividends: GBSM (for the Europeans, where $b=r$), the CRR tree \citep{cox1979option} for the Americans. With dividends: same as Week 07, the non-recombining tree for all four. At a dividend node the hold value comes from a new tree at $S-D$, and exercise is decided with the cum-dividend price $S$.
+
+\begin{table}[H]
+\centering\small
+\caption{Option values, $N=500$. ``Effect'' is dividends minus no dividends, both from the tree. ``GBSM on $S-PV(D)$'' subtracts \$1.7221 from $S$.}
+\label{tab:p2prices}
+\resizebox{\textwidth}{!}{\tbl{p2_prices}}
+\end{table}
+
+If there are no dividends, the tree value of the European call (or put) with $N=500$ is \$0.0018 higher than GBSM; that is the discretization error, so I measure the effect of the dividends tree against tree. GBSM on $S-PV(D)=46.7779$ is \$0.104 below the tree for both the call and the put. The difference is the same for both: both models satisfy parity with an identical forward, so it comes from volatility. GBSM's 30\% is applied to $S-PV(D)$, while the tree's 30\% is applied to the full price till each ex-date. That means more variance at expiration, and both types of options benefit from it.
+
+\paragraph{(d) Convergence in $N$.} The values oscillate rather than settle smoothly because the strike and the early exercise boundaries lie in different locations with respect to the nodes as $N$ is varied (Figure~\ref{fig:p2conv}, Table~\ref{tab:p2conv}). $N=100$ and $N=105$ differ by 0.0075 for the call. Over $N=400$--500 the call moves within a band of 0.0021 and the put within 0.0022, and $N=1000$/$1005$ give 3.4679/3.4686 and 5.3698/5.3703. The early exercise premium is just the difference between the two trees on the same grid, so a lot of it cancels out: the put's premium moves within only 0.0003. The premium of the call still moves within 0.0015, since only the American tree has an exercise boundary.
+
+\begin{table}[H]
+\centering\small
+\caption{American values with dividends for neighbouring $N$.}
+\label{tab:p2conv}
+\tbl{p2_convergence}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{\fig{p2_convergence}}
+\caption{American call and put with dividends for $N=10,15,\dots,500$. Dotted line: $N=1000$.}
+\label{fig:p2conv}
+\end{figure}
+
+\paragraph{(e) Delta and gamma.} $\Delta\approx\frac{V(S+h)-V(S-h)}{2h}$ and $\Gamma\approx\frac{V(S+h)+V(S-h)-2V(S)}{h^2}$ (Week 07, 3.3), with $N=500$ fixed; $u$, $d$ and $p$ do not depend on $S$, so only the starting price changes. The call has a delta of approximately 0.505 and the put has a delta of $-0.549$, while the gamma is discussed in (h).
+
+\begin{table}[H]
+\centering\small
+\caption{Central-difference delta and gamma of the American options with dividends, $N=500$.}
+\label{tab:p2greeks}
+\tbl{p2_greeks}
+\end{table}
+
+\paragraph{(f) Sensitivity to each dividend.} I use central differences with a one-cent bump in each dividend, $(V(D+0.01)-V(D-0.01))/0.02$. The calls lose between 0.11 and 0.49 per dollar of dividend and the puts gain 0.55 to 0.61.
+
+\begin{table}[H]
+\centering\small
+\caption{Change in value per \$1 of each dividend, $N=500$.}
+\label{tab:p2sens}
+\tbl{p2_div_sens}
+\end{table}
+
+\subsection*{Reconcile}
+
+\paragraph{(g) Early exercise premiums.} Same tree and $N$: American minus European.
+
+\begin{table}[H]
+\centering\small
+\caption{Early exercise premium, $N=500$.}
+\tbl{p2_premium}
+\end{table}
+
+All the predictions held. The call premium goes from 0 to 0.2932, the put's premium falls from 0.1278 to 0.0854, and the call's ends up the bigger premium. Both calls lost value and both puts gained, and the American call lost less (\$0.45 against \$0.75). The put premium decreased since the put holder does not exercise early as much anymore, but rather waits for the ex-dates, notably the price decrease of \$1.50 at $t=0.4$. On the tree, none of the 101 nodes just before $D_1$ exercises, as (a) said.
+
+Since there are no dividends after $D_2$, the American call is then worth the same as the European. In that case, exercise just prior to $t=0.40$ is optimal when $S-X\ge C_{BS}(S-1.50,\,X,\,0.1)$; solving by bisection gives $S^*=52.72$, and the lowest exercised node on the tree is 52.73. The tree puts a risk-neutral probability of 32.6\% on being above $S^*$ then. The premium of 0.293 is that probability times an average discounted gain of around \$0.90 per exercise, which is less than the most the exercise can potentially gain, $D_2$ minus the interest on the strike, \$1.28.
+
+\paragraph{(h) The Greek that does not settle.} Gamma. Delta is stable (0.5052 for the call, $-0.5488$ for the put, for every $h\le0.1$). The call's gamma goes 0.041, 0.00035, 0.00025, then essentially 0 as $h$ shrinks, and the put's stays erratic around 0.006. As a rough benchmark, the European GBSM gamma at $S-PV(D)$ is 0.0400; this lies near the $h=1$ gamma values, but it is the European's gamma.
+
+For fixed $N$ the tree value is piecewise linear with respect to $S$. Any node price is of the form $S$ times a constant minus fixed dividends, and so the value is linear in $S$ as long as a terminal node does not cross the strike and an interior node does not cross the exercise boundary. Its slope (the local delta) is a staircase (Figure~\ref{fig:p2kinks}). The rises are grouped in clusters with a separation of a factor $u^2$, or about 0.91--0.93 in $S$ at this price. The slope is nearly constant between clusters, with $S=48.50$ being in such a section (between 48.23 and 48.87). Bumps that are not bigger than 0.1 remain within it and the second difference is near zero, while bumps of 1 reach over the adjacent rises and pick up the average curvature. The put's gamma keeps bouncing around with a small bump around $S$, because the put's exercise boundary adds kinks at every step, so it does not go to zero. Since delta only needs the local slope, it settles.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{\fig{p2_kinks}}
+\caption{American call at $N=500$ for $S$ within $\pm1.5$ of 48.50 (grid 0.01). Left: value. Right: slope between neighbouring grid points. Dashed lines: $S\pm1$; dotted lines: $S\pm0.1$.}
+\label{fig:p2kinks}
+\end{figure}
+
+\paragraph{(i) Why the two dividends differ.} $D_1$ costs the American call \$0.485 per dollar, $D_2$ only \$0.105. From (a), nobody exercises before $D_1$, which means that the call takes the full price drop. $D_2$ does not harm high delta (high price) states since the holder would exercise before the dividend and retain it, so $D_2$ only hurts the low-delta states where the call is left alive.
+
+The European call cannot exercise and suffers a loss of \$0.441 and \$0.386 per dollar. The difference is timing: an early dividend is compounded with more growth until expiry, the earlier dividend is also discounted less, and calls expire in the money when the stock has been growing fast. The puts, which end up in the money after low growth, benefit a bit more from $D_2$. So $D_2$'s cost was reduced from 0.386 to 0.105 due to early exercise. It also exposes the American call slightly more to $D_1$ (0.485 against 0.441): inside the exercise region the call is worth $S-X$ with a delta of 1, higher than the European's (that is, a lower price after $D_1$ costs it more).
+
+%======================================================================
+\section{VaR of an option book}
+
+$S_0=\$99.12$, 500 arithmetic daily returns. GBSM with $b=r=4.25\%$, $T=\text{DaysToExpiry}/255$, fixed implied vols, 10 trading day horizon, zero expected return. The positions:
+
+\begin{table}[H]
+\centering\small
+\caption{The four books.}
+\tbl{p3_positions}
+\end{table}
+
+\subsection*{Predict}
+
+\paragraph{(a) Greeks and the delta normal ranking.} Book Greeks: holding-weighted sums over positions.
+
+\begin{table}[H]
+\centering\small
+\caption{Book value and Greeks at \$99.12; $\Theta$ per year and its 10 day carry.}
+\label{tab:p3greeks}
+\tbl{p3_greeks}
+\end{table}
+
+Delta normal only sees $\delta\,\Delta S$. It is off by the size of $\tfrac12\Gamma\Delta S^2$ relative to the delta term, along the direction of gamma's sign (Week 04, 4.3). My ranking, worst first:
+\begin{enumerate}\setlength\itemsep{0.1em}
+\item ShortStraddle: $\delta\approx-0.89$, $\Gamma=-8.09$. This book will lose out on any big move, with a delta normal VaR near zero. Large understatement.
+\item HedgedShortCall: $\delta\approx-0.44$, $\Gamma=-4.05$. The same issue at half the size. Large understatement.
+\item CoveredCall: $\delta\approx70$ dominates; $\Gamma=-3.79$ adds to down-move losses. Modest understatement.
+\item RiskReversal: $\delta\approx61$, small $\Gamma=+0.54$. Close, slightly overstated.
+\end{enumerate}
+
+\paragraph{(b) P\&L with no price move, and ES/VaR.} If there is no price movement then the P\&L is approximately equal to the theta carry $\Theta\cdot10/255$. Each of the four signs is positive: about \$58 for the CoveredCall, \$130 for the ShortStraddle and \$73 for the HedgedShortCall, which consist of short options, and the small \$0.7 for the RiskReversal, where the decay of the long call and the carry of the short put nearly balance.
+
+A normal P\&L has ES/VaR $=1.25$ at 5\%. In the case of the ShortStraddle and HedgedShortCall, the P\&L is approximately $-\tfrac12|\Gamma|\Delta S^2$, which means symmetric shocks will result in a long left tail, and I'm expecting to see ratios well above 1.25. The CoveredCall should be a little above and the RiskReversal close to 1.25.
+
+\subsection*{Fit}
+
+\paragraph{(c) Moments and fits.} Moments of the daily returns, after that the two fits:
+
+\begin{table}[H]
+\centering\small
+\caption{ABC daily arithmetic returns.}
+\tbl{p3_moments}
+\end{table}
+
+\begin{table}[H]
+\centering\small
+\caption{Normal and Student $t$ fits. ``Implied s.d.'' is $\sigma\sqrt{\nu/(\nu-2)}$ for the $t$.}
+\label{tab:p3fits}
+\tbl{p3_fits}
+\end{table}
+
+The skew is close to zero and the excess kurtosis is 2.46, suggesting a symmetric, fat-tailed distribution: the $t$ (Week 01, Table 6). The $t$ ($\nu=5.79$) wins on AICc by 28 points ($-2700.3$ vs $-2671.9$). No greater likelihood was found when refitting from five starting values of the parameter $\nu$. It appears they differ in tail shape, as both have similar s.d.s day-to-day (1.669\% vs 1.667\%).
+
+\paragraph{(d) Delta normal VaR and ES.} $\mathrm{VaR}=-\Phi^{-1}(\alpha)\,|\delta S|\,\sigma\sqrt{10}$ and $\mathrm{ES}=\frac{\phi(\Phi^{-1}(\alpha))}{\alpha}\,|\delta S|\,\sigma\sqrt{10}$, with $\sigma$ from the normal fit and the $\sqrt{t}$ rule (Week 04, Section 7).
+
+\begin{table}[H]
+\centering\small
+\caption{10 day delta normal VaR and ES (\$).}
+\tbl{p3_deltanormal}
+\end{table}
+
+\paragraph{(e) Simulation with full revaluation.} For each model I drew 1 million paths of 10 daily returns centred at zero, compounded each of those to $S_{10}=S_0\prod(1+r_i)$, and then re-priced each position at 20 days to expiry. Both models use the same uniforms (common random numbers), therefore removing most of the Monte Carlo noise from the comparison. A second seed did not move any VaR or ES by more than 1.1\%.
+
+\begin{table}[H]
+\centering\small
+\caption{10 day P\&L by full revaluation (\$). Last column: ES/VaR at 5\%.}
+\label{tab:p3sim}
+\tbl{p3_sim}
+\end{table}
+
+\paragraph{(f) P\&L against the price in 10 days.} If vols are fixed, then the 10 day P\&L is only a function of $S_{10}$ (Figure~\ref{fig:p3pnl}). I plotted the delta-only line, $\delta(S_{10}-S_0)$, and also the delta-gamma-theta curve for part (g). The CoveredCall lines up with its delta line on the way down, but above the 105 strike, the short call puts a ceiling on the upside movement. The ShortStraddle and HedgedShortCall are upside-down parabolas peaking near today's price, with close to flat delta lines. The RiskReversal sits close to its line in the middle and gets steeper on both sides: above 105 (with the long call) and below 95 (with the short put).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{\fig{p3_pnl}}
+\caption{10 day P\&L against ABC's price in 10 days: full revaluation, delta only, and delta-gamma-theta.}
+\label{fig:p3pnl}
+\end{figure}
+
+\subsection*{Reconcile}
+
+\paragraph{(g) What delta normal cannot see.} The ShortStraddle's and HedgedShortCall's 5\% delta normal VaRs are \$7.64 and \$3.82, compared with full revaluation of \$315 and \$149. In
+\[
+\Delta P\approx\delta\,\Delta S+\tfrac12\Gamma(\Delta S)^2+\Theta\,\Delta t,
+\]
+delta normal only keeps the first term, and when $\delta\approx0$ that term is close to 0 however big the move. The loss comes from the gamma term, which is negative both ways, and it increases as $\Delta S^2$ increases.
+
+On the same paths I add the gamma and theta terms:
+
+\begin{table}[H]
+\centering\small
+\caption{Delta-gamma-theta approximation on the normal paths (\$).}
+\tbl{p3_dgt}
+\end{table}
+
+At 5\% this is within about 7\% of full revaluation for every book (\$294 vs \$315, \$139 vs \$149). It overshoots in the far tail (1\% ES \$836 vs \$752, \$410 vs \$368) for the two delta-neutral short gamma books, as the real gamma diminishes as the price goes away from the strike. It undershoots for the RiskReversal (\$761 vs \$868) as during a significant decline the short 95 put goes into the money and the gamma of the book becomes negative. The gamma term fixes most of it at 5\%, but not in the far tail.
+
+My ranking in (a) held at 5\%: the delta normal VaR for the CoveredCall and RiskReversal was \$76 less and \$38 more than it should be, respectively. Part of these gaps is compounding, not gamma: the compounded 10 day 5\% return quantile is $-8.43\%$ vs $-8.67\%$ from the $\sqrt{10}$ rule, worth about \$15 on the RiskReversal. I was wrong on the tail of the RiskReversal. Its 1\% ES is \$868 (normal) and \$936 ($t$), above the delta normal \$855, and its ES/VaR (1.31) is above the CoveredCall's (1.29), the reverse of what I predicted in (b). I treated its gamma as positive and small, but it is negative in big declines, while the CoveredCall's short call is out of the money in a decline. As predicted, the ES/VaR ratios of the ShortStraddle and HedgedShortCall (1.54, 1.57) turned out to be well above 1.25.
+
+\paragraph{(h) Mean P\&L.} The signs in (b) remained unchanged. (b) assumed no price move, though, and the average P\&Ls across all paths are much lower for the three short-option books:
+
+\begin{table}[H]
+\centering\small
+\caption{10 day mean P\&L and its parts (\$, normal model). Theta carry plus the expected gamma P\&L equals the financing term plus the vol premium.}
+\label{tab:p3carry}
+\resizebox{\textwidth}{!}{\tbl{p3_carry}}
+\end{table}
+
+The majority of the theta is offset by expected gamma losses ($\tfrac12\Gamma S^2\sigma^2\Delta t$). For each option, GBSM gives $\Theta_j=r(V_j-S\delta_j)-\tfrac12\sigma_{iv,j}^2S^2\Gamma_j$, so the remainder splits into two pieces (Table~\ref{tab:p3carry}) and their sum comes out close to the simulated means, within a dollar:
+\begin{itemize}\setlength\itemsep{0.1em}
+\item A vol premium, $\tfrac12S^2\Delta t\sum_j h_j\Gamma_j(\sigma^2-\sigma_{iv,j}^2)$: the options were sold at 27--32\% implied vol, whereas the fitted vol is equal to 26.6\%. This amounts to \$20.6 for the ShortStraddle and \$10.3 for the HedgedShortCall.
+\item A financing term, $r(V-S\delta)\Delta t$: GBSM prices the options with drift $r$, but the simulated stock has zero drift. This is $-\$1.2$ and \$7.7.
+\end{itemize}
+So, the premium that is paid for protection against a significant move is the primary reason for the positive mean of the short gamma books. The CoveredCall retains just \$6.3 of its \$58 carry. The 95 put, sold at a vol level of 32\%, is where the RiskReversal's mean (\$8.6) comes from. This premium reflects the tail risk: the straddle's average of \$19.6 comes with a 1\% VaR of \$590--639 and a 1\% ES of \$752--851 (normal to $t$).
+
+\paragraph{(i) Normal vs $t$.} Change from the normal to the $t$, by book:
+
+\begin{table}[H]
+\centering\small
+\caption{Normal to $t$: change in mean (\$) and in each risk number (\%).}
+\tbl{p3_t_vs_normal}
+\end{table}
+
+1\% ES moves most (+13.2\% to +13.5\% for the two delta-neutral short gamma books, +6.7\% to +7.9\% for the others); 5\% VaR moves least ($-0.1\%$ to $+2.1\%$). The reasons:
+\begin{enumerate}\setlength\itemsep{0.1em}
+\item The variance of the $t$ is almost identical with the variance of the normal and the corresponding 5\% quantiles are almost the same value; the two distributions diverge more and more further out (Week 05, Figure 1). Compounding the ten daily returns also helps to average out some of the daily kurtosis. The 10 day 5\% return quantile is $-8.43\%$ under both models, while the 0.1\% quantiles are $-15.3\%$ and $-16.6\%$. Thus, the CoveredCall and RiskReversal, which lose on one side, only marginally move at 5\%.
+\item The ShortStraddle and HedgedShortCall lose on both sides: their 5\% VaR is close to the 2.5\% and 97.5\% return quantiles, where the $t$ is already a bit wider ($-10.07\%$ vs $-9.96\%$, $10.73\%$ vs $10.69\%$). That is why their 5\% VaR increases by approximately 2\%.
+\item Their loss grows faster than the move, so a fatter return tail gives an even fatter loss tail, and their 1\% ES moves the most. The RiskReversal's ES moves more than the CoveredCall's due to the reason in (g).
+\end{enumerate}
+
+\paragraph{(j) ``Flat''?} \emph{``Under the fat-tailed model the 10-day 1\% VaR of this book is around \$311, and the 1\% ES \$417, compared with an average gain of \$18. The delta hedge only removes our risk from small moves; we are still short approximately 4 units of gamma and short vega, so a 10-day rise of more than 6.1\% or fall of more than 5.6\% turns the theta we collect into a loss, and the book needs gamma and vega limits as well as the delta limit.''}
+
+%======================================================================
+\section{A Sharpe ratio that sells insurance}
+
+240 monthly returns; $r_f=3\%$ a year, used as 0.25\% a month; Sharpe ratios annualized by $\sqrt{12}$.
+
+\subsection*{Predict}
+
+\paragraph{(a) Moments and Sharpe ratios.} Annualized Sharpe is $\sqrt{12}\,(\bar r-r_f)/s$.
+
+\begin{table}[H]
+\centering\small
+\caption{Monthly moments, annualized mean and vol, annualized Sharpe ratio.}
+\label{tab:p4mom}
+\tbl{p4_moments}
+\end{table}
+
+PUTW is a seller of puts on EQ, and has a Sharpe ratio of 0.78, which is out of place, being double the 0.38 of EQ's. Both its skew ($-6.6$) and kurtosis (61) are also extreme. In the 216 months in which EQ drops by under 5\%, the put expires worthless and PUTW collects a fixed premium and also collects interest (0.639\% in 193 months when the volatility is low and 2.764\% in 23 months when the volatility is high).
+
+\begin{table}[H]
+\centering\small
+\caption{Each asset's most extreme month: its share of the sums of squared and fourth-power deviations, and the moments without it.}
+\resizebox{\textwidth}{!}{\tbl{p4_single_month}}
+\end{table}
+
+June 2008 (EQ $-23.5\%$, PUTW $-16.7\%$) is 46\% of PUTW's sum of squared deviations and 81\% of its fourth-power sum. With it the Sharpe ratio is 0.78, and the kurtosis is 61. Without it the Sharpe ratio increases to 1.27, and the kurtosis decreases to 41, but that's still a high level with the other crash months still remaining. Thus one month is a substantial portion of PUTW's tail, and the Sharpe ratio is this high simply because during the majority of months things are rather calm, and the sample experiences only a few crashes.
+
+\paragraph{(b) Before optimizing.} The optimizer only has access to $\mu$ and $\Sigma$. With zero correlation the tangency weights are proportional to $(\bar r-r_f)/s^2$, which is 13.7 for PUTW, 4.6 for BOND, 2.2 for EQ and 1.0 for STK. The correlation between PUTW and BOND is close to 0 ($-0.01$), thus a two-asset split would be approximately 75/25. I believe that EQ and STK will get little or nothing as they are also the lowest on the ratio and are correlated with PUTW (0.55 for EQ). I think approximately 70--75\% will go to PUTW and most of the remainder will be in BOND. I expect the portfolio to pick up PUTW's tail, and for this reason, I believe that its historical 1\% ES will be several times that of a normal with the same mean and s.d.
+
+\subsection*{Fit}
+
+\paragraph{(c) Max Sharpe portfolios.} Unconstrained: $w\propto\Sigma^{-1}(\mu-r_f)$. Constrained: maximize the Sharpe ratio from 20 random starts with JuMP/Ipopt as in the class \texttt{maxSR}. These are then verified by comparison with a convex QP version (minimize $y'\Sigma y$ subject to $(\mu-r_f)'y=1$, $y\ge0$; and, for the cap, $y_{PUTW}\le0.2\sum y$; then $w=y/\sum y$). They agree to $10^{-5}$.
+
+\begin{table}[H]
+\centering\small
+\caption{Max Sharpe ratio weights (sample mean and covariance of monthly returns).}
+\label{tab:p4w}
+\tbl{p4_weights}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{\fig{p4_frontier}}
+\caption{Long only efficient frontier, capital market line through the long only tangency portfolio, the four assets, and the portfolio with PUTW capped at 20\%. Annualized.}
+\label{fig:p4frontier}
+\end{figure}
+
+\paragraph{(d) Sharpe, VaR and ES.} Monthly VaR and ES of each portfolio, calculated from the 240 historical returns of each portfolio and from a normal assumed to have the same mean and s.d.\ as the historical returns:
+
+\begin{table}[H]
+\centering\small
+\caption{Monthly VaR and ES (\% of value).}
+\label{tab:p4risk}
+\tbl{p4_risk}
+\end{table}
+
+\paragraph{(e) CAPM regression of PUTW on EQ.} For all months, then for months when EQ excess return is less than $-5\%$ and for months with excess return greater than or equal to $-5\%$:
+
+\begin{table}[H]
+\centering\small
+\caption{CAPM regression of PUTW's excess return on EQ's.}
+\label{tab:p4capm}
+\tbl{p4_capm}
+\end{table}
+
+All months: $\alpha=0.274\%$ a month (3.29\% a year), $t=3.05$, $\beta=0.185$, $R^2=0.30$. The 26 down months: $\beta=0.943$, $R^2=0.95$. The large intercept (5.9\%) in the months below $-5\%$ is not a measure of alpha because the line is fitted only to months below $-5\%$ and meets zero far outside that sample.
+
+\subsection*{Reconcile}
+
+\paragraph{(f) What the optimizer bought.} The long only optimizer has a 73:26 split between PUTW and BOND, which is pretty near my prediction, so the portfolio is pretty much just short monthly crash insurance on EQ. The Sharpe ratio fails to pick this up because it uses the s.d., and PUTW's is low because almost every month pays the same premium, meaning that a symmetric second moment spreads the few months which crash over the entire sample period. The s.d.\ is also not a coherent risk measure in that it does not have the monotonicity property: a strategy could have lower s.d., but lose more in the bad states (Week 07, 5.1.1).
+
+ES is coherent \citep{artzner1999coherent}: monotone (a position that loses at least as much in each state is at least as risky), subadditive (combining positions cannot increase the risk), positively homogeneous (doubling a position doubles the risk) and translation invariant (adding cash reduces the risk by that amount). VaR has the other three but lacks subadditivity, and it reads only one quantile and thus does not identify a crash occurring beyond the quantile. ES averages all losses beyond the quantile, so the size of the crashes does matter. A caveat: the course's empirical 1\% ES is very noisy since it is based on the two worst months out of 240. My second prediction came true: the historical 1\% ES of the long only portfolio is 10.3\%, while that of the matching normal is 2.9\%, so the historical ES is 3.6 times as large. Its historical 5\% VaR is even lower than the normal VaR (0.29\% vs 1.56\%). The 5\% quantile falls in months such as February 2016 and January 2013, when EQ dropped by approximately 6\%, the put finished just in the money, and almost all of the loss on the put was offset by the premium. Capping PUTW at 20\% costs Sharpe (0.59 vs 0.82) and raises the 5\% VaR to 1.56\%, but cuts the 1\% ES to 6.0\%. Hence, a 5\% VaR limit would treat the less risky portfolio as the more risky portfolio.
+
+\paragraph{(g) Is PUTW's alpha skill?} No. PUTW has two betas: 0.04 in the 214 months in which EQ's excess return was greater than $-5\%$ (typically months where the put expires out-of-the-money), and 0.94 in the 26 months below $-5\%$, where the short put acts like a long index position. The pooled regression estimate is a single beta of 0.18, which understates the sensitivity of PUTW's realized return during the crash months, and puts any compensation for these downside risks into the intercept term. Thus, the 3.3\% per annum alpha is not skill, but compensation for downside market exposure which the regression model is ignoring. A single beta regression will not detect an exposure that happens to change based on the condition of the current market, and a short put's exposure does. For a fair test, the up and down betas should be separated or a put-writing benchmark should be used.
+
+\paragraph{(h) How precise are the inputs?} The standard error of a mean monthly return is $s/\sqrt{240}$:
+
+\begin{table}[H]
+\centering\small
+\caption{Standard error of each mean monthly return and the 95\% interval for the annual mean.}
+\tbl{p4_precision}
+\end{table}
+
+With 240 months the means are poorly estimated: the 95\% intervals for the annual mean of the returns are 2.0\% to 17.0\% for EQ and $-0.7\%$ to 27.7\% for STK. Only PUTW's mean exceeds $r_f$ by more than two SE, and its symmetric normal interval does not account for the skew, and assumes that there is a representative number of crashes in the sample. Variances are more tightly estimated than means, but PUTW's variance heavily relies on one month (46\% from June 2008).
+
+To observe the movements of the weights, I resampled whole months with replacement 1000 times and re-solved the portfolios (convex QP) with no failed solves.
+
+\begin{table}[H]
+\centering\small
+\caption{Bootstrap distribution of the tangency weights (1,000 resamples).}
+\tbl{p4_bootstrap}
+\end{table}
+
+The long only range for PUTW is 23\%--100\% (5th to 95th percentile) and for BOND it is 0\%--71\%. With 39\% of resamples missing June 2008, the median PUTW weight in those resamples is 87\%, as compared to 63\% when it is in the sample. I'd only trust that PUTW would have a large weight. One reason EQ and STK sit near zero in the long only portfolio is that the constraint is binding: see EQ in the capped portfolio running between 0\% and 42\%, and in the unconstrained portfolio between $-36\%$ and 17\%. I wouldn't buy into the split between PUTW and BOND. Additionally, resampling cannot identify crashes that are not in the sample, so these ranges actually understate the uncertainty.
+
+%======================================================================
+\section{Alpha or factor exposure?}
+
+1257 daily returns, 1996-10-01 to 2001-09-28, matched to the Fama-French factors and momentum \citep{fama1993common,carhart1997persistence,french2024data}, which I divide by 100. Excess return is fund minus RF. Annualized with 252 days.
+
+\subsection*{Predict}
+
+\paragraph{(a) Sharpe ratio and CAPM.} Excess returns (annualized; CAPM by OLS on daily figures):
+
+\begin{table}[H]
+\centering\small
+\caption{Annualized excess return, vol and Sharpe ratio, and the CAPM fit.}
+\tbl{p5_summary}
+\end{table}
+
+FUND1 looks more skilled: Sharpe 0.84 vs 0.75, CAPM alpha 11.1\% a year ($t=3.20$) vs 6.2\% ($t=1.83$, not significant at 5\%), and an appraisal ratio $\alpha/\sigma_\varepsilon$ of 1.43 vs 0.82.
+
+\paragraph{(b) Residual correlations.} Each fund's CAPM residual correlated with the factors it omits, and the average return on each of the factors:
+
+\begin{table}[H]
+\centering\small
+\caption{Correlation of each fund's CAPM residual with the omitted factors.}
+\tbl{p5_resid_corr}
+\end{table}
+
+\begin{table}[H]
+\centering\small
+\caption{Average returns, \% a year: fund sample and the last ten years of the files.}
+\label{tab:p5premia}
+\tbl{p5_premia}
+\end{table}
+
+The residual of FUND1 was 0.80 correlated with momentum and 0.21 with HML, and momentum yielded a return of 19.7\% per annum in this sample and HML 9.4\% per annum. Before fitting, a one-factor regression of the residual yields a loading of $\rho\,\sigma_\varepsilon/\sigma_f$, which, multiplied by the average return of the factor, will yield roughly the alpha that the factor should absorb:
+
+\begin{table}[H]
+\centering\small
+\caption{Rough pre-fit loadings and the change in alpha they imply (each factor on its own).}
+\tbl{p5_guess}
+\end{table}
+
+For FUND1, momentum alone should take about 7.6\% of its 11.1\% CAPM alpha and HML about 1.2\%, so in the Carhart model I'm predicting FUND1's alpha will drop close to zero, with a small fall under FF3. For FUND2, SMB had a negative premium ($-4.1\%$) and its HML residual correlation is also negative, so adding these two should increase FUND2's alpha (by roughly 0.9\% and 0.7\%), and momentum should not change it much.
+
+\subsection*{Fit}
+
+\paragraph{(c) The three models.} Each fund regressed on the market alone, the three Fama-French factors, and then those three plus momentum:
+
+\begin{table}[H]
+\centering
+\caption{CAPM, Fama-French 3 and Carhart 4 factor fits. Alpha in bp per day; standard errors in parentheses.}
+\label{tab:p5models}
+\resizebox{\textwidth}{!}{\tbl{p5_models}}
+\end{table}
+
+FUND1 loads on momentum (0.394, s.e.\ 0.007) and HML (0.291), and its $R^2$ rises from 0.83 to 0.96. FUND2 loads on SMB (0.21), and the momentum and HML exposure is essentially zero; the $R^2$ only improves from 0.57 to 0.61.
+
+\paragraph{(d) Expected annual return.} Expected excess return $=252\sum_i\beta_i\bar f_i$ with the average factor returns from 2014-10-01 to 2024-09-30, plus $252\,\overline{RF}$ for the total:
+
+\begin{table}[H]
+\centering\small
+\caption{Expected annual return under the last ten years' factor returns, with and without the four factor alpha, and the realized return in the fund sample.}
+\label{tab:p5exp}
+\tbl{p5_expected}
+\end{table}
+
+\paragraph{(e) Worst momentum day.} The worst daily momentum return is $-18.44\%$ (1939-09-05). With other factors flat the loss on \$10m is $-\beta_{Mom}\times(-0.1844)\times10^7$:
+
+\begin{table}[H]
+\centering\small
+\caption{One day loss if the worst momentum day repeated.}
+\tbl{p5_mom_shock}
+\end{table}
+
+FUND1 would have experienced a \$726,000 (6.2 of its daily standard deviations) loss. While this factor exposure may seem innocuous day to day, it has serious crash risk: under a normal this loss is a $3\times10^{-10}$ event. A crucial assumption here is that other factors remain flat: many times momentum crashes have been accompanied by rebounds in the markets, which FUND1's market and value betas would somewhat offset. FUND2 would only be slightly impacted.
+
+\subsection*{Reconcile}
+
+\paragraph{(f) Did the alphas move as predicted?} Mostly. FUND1's alpha falls from 4.41 to 2.96 to 0.03 bp a day ($t=0.04$ under Carhart). In fact, FF3 already took about 33\% of it, which was more than the ``little'' I expected, as the market beta went from 0.85 to 1.00 and SMB got a small positive loading after the factors were estimated together. In every model $\alpha$ equals $\bar y-\sum\beta\bar f$, so the difference between CAPM and Carhart splits by factor:
+
+\begin{table}[H]
+\centering\small
+\caption{CAPM alpha minus Carhart alpha, split by factor.}
+\tbl{p5_alpha_decomp}
+\end{table}
+
+FUND1's alpha falls by 11.0 points, from 11.1\% to 0.07\% a year: 7.75 from momentum ($0.394\times19.7\%$), 2.72 from value ($0.291\times9.4\%$), and 0.56 from the higher market beta ($0.102\times5.4\%$). The momentum part is close to my best approximation of 7.6. During FUND1's sample, when both momentum stocks and value stocks did well, it held both. As predicted, FUND2's alpha increased from 2.45 bp to 2.73 bp a day, as its SMB loading was a drag while small caps lagged; the negative HML correlation went away once SMB was added to the model.
+
+\paragraph{(g) Alpha under APT, and the fee.} Under APT, if returns are generated by a linear factor model, no arbitrage implies $E(r-r_f)\approx\sum_i\beta_i RP_i$, which holds exactly only for well-diversified portfolios \citep{ross1976arbitrage}. Alpha is the part of the expected return not explained by exposure to priced factors; this will be dependent on the factors included in the model. FUND1's CAPM alpha consists of momentum exposure and value exposure. If one is willing to accept the turnover costs associated with the momentum factor, a factor portfolio can do just that for much less than an alpha fee.
+
+\emph{In my opinion}, it is FUND2 that deserves the alpha fee, and it is not FUND1, and the four factor model is the way I would determine that. AICc is nearly indifferent for FUND2 (1.8 points difference, as its momentum beta is not distinguishable from zero) and chooses Carhart for FUND1 by a huge margin, so FUND2's result does not depend on the choice, and I would choose screening every single fund for momentum over saving one parameter. The other 6.9\% a year that FUND2 has left could be skill, or exposure to factors that Carhart fails to include (profitability, investment, liquidity). I wouldn't pay too much, as $t=2.15$ ($p\approx0.03$) is weak evidence over 5 years of one market cycle when you consider all the funds that might have caught your attention.
+
+\paragraph{(h) Factor-model expected returns.} FUND1 earned 20.7\% a year, but its betas give 13.5\% (13.6\% with its tiny alpha). FUND2 earned 13.4\%, and its betas give 6.8\%, or 13.7\% if its alpha continues, which is close. Part of the gap in the total returns is the risk free rate (4.9\% in the sample, 1.6\% recently). On excess returns the forecast return minus the realized return is $\sum\beta\,\Delta\bar f-\alpha$:
+
+\begin{table}[H]
+\centering\small
+\caption{From realized excess return (fund sample) to the forecast without alpha, \% a year.}
+\resizebox{\textwidth}{!}{\tbl{p5_h_decomp}}
+\end{table}
+
+For FUND1 the higher market premium (+6.6) over the last ten years is more than offset by lower momentum and value premia ($-6.8$ and $-3.4$). For FUND2 the factors would have raised its return, and the gap would represent the alpha the forecast is missing. So a forecast based on a factor model will greatly hinge on the window over which the premia are calculated (momentum was 19.7\% a year in the fund sample and 2.4\% recently) and on the assumption of persistence of alpha. If these inputs were fed into the Problem~4 optimizer, it would redistribute the weight to those factors that did well in the window that was selected. The factor model comes in handy here, as the factor files date back to 1926, which means that one can estimate premia over a much longer horizon than the life of any fund, and by using alpha $=0$, the optimizer can be prevented from chasing spurious alphas. But at the end of the day, the premia themselves remain the least reliable inputs.
+
+%======================================================================
+\section{Code}
+
+The code and the README are contained in the \texttt{Assignment3} folder. After \texttt{Pkg.instantiate()}, \texttt{julia -{}-project=. run\_all.jl} performs the library tests (Table~\ref{tab:tests}), stops on failure, and then executes \texttt{problem1.jl}--\texttt{problem5.jl}. All of the numbers in this write-up are from the code, which writes out its tables to \texttt{output/tables} (CSV and the LaTeX tables employed here) and its figures to \texttt{output/figures}. Fixed seeds are used in the generation of random numbers. The conventions I used are documented by comments in the scripts: parity with a dividend yield, the escrowed-dividend comparison, bump sizes, the use of common random numbers in Problem~3, the monthly risk free rate and the annualization factors.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}
