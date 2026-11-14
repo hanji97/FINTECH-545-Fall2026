@@ -86,6 +86,7 @@ report/               LaTeX source of the write-up and the bibliography
   the t (common random numbers), seed `MersenneTwister(545)`; a second seed
   is used only to measure Monte Carlo error.
 - Problem 4: monthly risk free rate 3%/12; Sharpe annualized by √12;
+- 
   bootstrap with 1,000 resamples of whole months, seed `MersenneTwister(545)`.
 - Problem 5: Fama-French and momentum files divided by 100; annualization
   by 252 trading days; "last ten years" is the ten years ending on the last
