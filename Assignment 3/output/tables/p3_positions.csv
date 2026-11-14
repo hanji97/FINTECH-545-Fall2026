@@ -1,0 +1,9 @@
+Book,Type,Strike,Days,IV,Holding
+CoveredCall,Stock,--,--,--,100.0
+CoveredCall,Call,105,30,27\%,-100.0
+ShortStraddle,Call,100,30,29\%,-100.0
+ShortStraddle,Put,100,30,29\%,-100.0
+RiskReversal,Call,105,30,27\%,100.0
+RiskReversal,Put,95,30,32\%,-100.0
+HedgedShortCall,Call,100,30,29\%,-100.0
+HedgedShortCall,Stock,--,--,--,50.0
