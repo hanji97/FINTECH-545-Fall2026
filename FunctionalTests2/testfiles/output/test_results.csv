@@ -1,0 +1,51 @@
+Test,Description,File,Status,MaxAbsDiff,MaxRelDiff,Tolerance,ToleranceOn,Note
+1.1,"Covariance, missing data, skip missing rows",testout_1.1.csv,PASS,0.0,0.0,1.0e-12,abs,""
+1.2,"Correlation, missing data, skip missing rows",testout_1.2.csv,PASS,0.0,0.0,1.0e-12,abs,""
+1.3,"Covariance, missing data, pairwise",testout_1.3.csv,PASS,0.0,0.0,1.0e-12,abs,""
+1.4,"Correlation, missing data, pairwise",testout_1.4.csv,PASS,0.0,0.0,1.0e-12,abs,""
+2.1,"EW covariance, lambda=0.97",testout_2.1.csv,PASS,2.220446049250313e-16,2.9518558419508027e-15,1.0e-12,abs,""
+2.2,"EW correlation, lambda=0.94",testout_2.2.csv,PASS,2.220446049250313e-16,5.888233258423088e-16,1.0e-12,abs,""
+2.3,"EW cov: EW var lambda=0.97, EW corr lambda=0.94",testout_2.3.csv,PASS,4.440892098500626e-16,5.84081516246546e-16,1.0e-12,abs,""
+3.1,near_psd on a covariance,testout_3.1.csv,PASS,1.3739009929736312e-15,8.038286292625062e-14,1.0e-10,abs,""
+3.2,near_psd on a correlation,testout_3.2.csv,PASS,6.106226635438361e-16,1.9653660033303146e-14,1.0e-10,abs,""
+3.3,Higham on a covariance,testout_3.3.csv,PASS,1.887379141862766e-15,1.096779940026751e-13,1.0e-8,abs,""
+3.4,Higham on a correlation,testout_3.4.csv,PASS,5.551115123125783e-16,2.2236712494823694e-14,1.0e-8,abs,""
+4.1,chol_psd,testout_4.1.csv,PASS,0.0,0.0,1.0e-10,abs,""
+5.1,"Normal simulation, PD input",testout_5.1.csv,PASS,8.326672684688674e-17,1.8966719610877183e-15,1.0e-8,abs,vs input cov 2.99e-04 (sampling error)
+5.2,"Normal simulation, PSD input",testout_5.2.csv,PASS,6.938893903907228e-17,1.2024324866027477e-15,1.0e-8,abs,vs input cov 5.64e-04 (sampling error)
+5.3,"Normal simulation, non-PSD input, near_psd fix",testout_5.3.csv,PASS,5.235915867540797e-13,1.9383724038902628e-10,1.0e-8,abs,vs input cov 8.37e-03 (sampling error)
+5.4,"Normal simulation, non-PSD input, Higham fix",testout_5.4.csv,PASS,1.3281112321017474e-11,7.649477596364486e-10,1.0e-8,abs,vs input cov 1.28e-02 (sampling error)
+5.5,"PCA simulation, 99% of variance explained",testout_5.5.csv,PASS,3.885780586188048e-16,1.1680347432543677e-14,1.0e-8,abs,vs input cov 5.93e-04 (sampling error)
+6.1,Arithmetic returns,testout6_1.csv,PASS,0.0,0.0,1.0e-12,abs,""
+6.2,Log returns,testout6_2.csv,PASS,0.0,0.0,1.0e-12,abs,""
+7.1,Fit a normal distribution,testout7_1.csv,PASS,6.938893903907228e-18,1.4835585834667932e-16,1.0e-12,abs,""
+7.2,Fit a generalized t,testout7_2.csv,PASS,1.3562573286662882e-10,3.313662368117203e-11,1.0e-6,rel,""
+7.3,t regression,testout7_3.csv,PASS,2.2530066701165197e-10,4.8327986945114884e-11,1.0e-6,rel,""
+7.4,AICc of the fitted t,testout7_4.csv,PASS,0.0,0.0,1.0e-6,rel,""
+7.5,NIG by the method of moments,testout7_5.csv,PASS,0.0,0.0,1.0e-10,abs,""
+7.6,NIG by maximum likelihood,testout7_6.csv,PASS,0.0002110075381125398,1.852981496953436e-5,0.001,rel,expected file is a scipy fit
+8.1,"VaR, normal",testout8_1.csv,PASS,6.938893903907228e-18,1.806318693002994e-16,1.0e-12,abs,""
+8.2,"VaR, generalized t",testout8_2.csv,PASS,5.581923812059131e-13,1.2365210054570922e-11,1.0e-6,rel,""
+8.3,"VaR, simulation from the fitted t",testout8_3.csv,PASS,5.946493297770417e-13,1.2592219614239516e-11,1.0e-6,rel,"vs 8.2: +2.11e-03, +1.20e-03"
+8.4,"ES, normal",testout8_4.csv,PASS,7.42807204634488e-12,1.081108888694115e-10,1.0e-9,abs,""
+8.5,"ES, generalized t",testout8_5.csv,PASS,1.955907658057754e-12,2.1220027764399758e-11,1.0e-6,rel,""
+8.6,"ES, simulation from the fitted t",testout8_6.csv,PASS,1.8930412792883544e-12,2.064668150520615e-11,1.0e-6,rel,"vs 8.5: -5.49e-04, -2.40e-04"
+9.1,"VaR/ES by stock and total, Gaussian copula",testout9_1.csv,PASS,5.764661636931123e-9,3.45477812901151e-11,1.0e-6,rel,total VaR95 165.14 vs sum of stocks 211.46
+10.1,"Risk parity, normal",testout10_1.csv,PASS,1.2449152819726805e-10,2.102870988545557e-9,1.0e-6,abs,CSD/budget spread 4.3e-12
+10.2,"Risk parity, half risk budget on X5",testout10_2.csv,PASS,2.859923409204157e-11,3.2562120201139247e-10,1.0e-6,abs,CSD/budget spread 2.5e-12
+10.3,"Max Sharpe ratio, w >= 0",testout10_3.csv,PASS,1.631698132165127e-8,0.030843149128321076,1.0e-6,abs,SR 0.572236 vs expected 0.572236
+10.4,"Max Sharpe ratio, 0.1 <= w <= 0.5",testout10_4.csv,PASS,5.877462100345454e-8,3.795326080251885e-7,1.0e-6,abs,SR 0.259070 vs expected 0.259070
+11.1,"Ex-post return and vol attribution, stocks",testout11_1.csv,PASS,3.3306690738754696e-16,6.9356295699583035e-15,1.0e-12,abs,""
+11.2,"Ex-post return and vol attribution, factors",testout11_2.csv,PASS,8.881784197001252e-16,5.443207887328167e-14,1.0e-12,abs,""
+12.1,"European options, GBSM and Greeks",testout12_1.csv,PASS,8.881784197001252e-16,1.6597855569831728e-16,1.0e-9,abs,""
+12.2,"American options, continuous dividends, Greeks",testout12_2.csv,PASS,6.042974121100997e-8,5.919734703637754e-9,1.0e-6,abs,"Theta = dV/dT, Rho at fixed b, as in the class file"
+12.3,"American options, discrete dividends",testout12_3.csv,PASS,1.7763568394002505e-15,1.224787637415364e-16,1.0e-9,abs,""
+13.1,Correlation from Kendall's tau,testout13_1.csv,PASS,0.0,0.0,1.0e-12,abs,min eigenvalue 0.536
+13.2,"Multivariate t, mean vector",testout13_2.csv,PASS,2.168404344971009e-19,1.559627575395249e-15,1.0e-12,abs,""
+13.3,"Multivariate t, scale matrix",testout13_3.csv,PASS,6.776263578034403e-20,7.351075694076888e-16,1.0e-9,rel,max |diag(nu/(nu-2)S) - var| 5.4e-20
+13.4,"Multivariate t, nu by profile and log likelihood",testout13_4.csv,PASS,4.547473508864641e-13,1.1931632016823024e-16,1.0e-9,rel,""
+13.5,Gaussian copula log likelihood,testout13_5.csv,PASS,8.431015885435045e-10,8.54635346872275e-12,1.0e-6,rel,""
+13.6,"t copula, nu by profile and log likelihood",testout13_6.csv,PASS,1.1937117960769683e-9,9.27524444092129e-12,1.0e-6,rel,""
+13.7,"Gaussian vs t copula, AICc and BIC",testout13_7.csv,PASS,2.3874235921539366e-9,9.47857035010838e-12,1.0e-6,rel,"dBIC = 54.58, t copula preferred"
+13.8,Lower tail dependence under the t copula,testout13_8.csv,PASS,0.0,0.0,1.0e-6,rel,""
+13.9,"VaR/ES by stock and total, t copula",testout13_9.csv,PASS,1.0130094096894027e-8,5.498002111114412e-11,1.0e-6,rel,total VaR95 163.00 vs sum of stocks 226.27; Gaussian copula total VaR95 167.09 ES95 223.56
