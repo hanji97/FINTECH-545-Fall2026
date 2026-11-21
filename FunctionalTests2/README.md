@@ -210,6 +210,7 @@ over the joint tail, is higher under the t.
 
 Julia 1.11.9. Packages pinned in `testfiles/Manifest.toml`: CSV, DataFrames,
 Distributions, StatsBase, Optim, ForwardDiff, SpecialFunctions, QuadGK, Roots,
+
 JuMP, Ipopt.
 
 `tools/nig_scipy_reference.py` needs Python with scipy and is only used for
